@@ -1,0 +1,85 @@
+name: Build Whiteboard APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Prepare web files
+        run: |
+          mkdir -p www
+          if [ ! -f www/index.html ]; then
+            f=$(find . -name index.html -not -path "./node_modules/*" -not -path "./android/*" -not -path "./www/*" | head -n 1)
+            if [ -z "$f" ]; then
+              echo "index.html NOT FOUND. Files in repo:"
+              find . -type f -not -path "./.git/*"
+              exit 1
+            fi
+            cp "$f" www/index.html
+          fi
+          ls -la www
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Add Android platform
+        run: npx cap add android
+
+      - name: Add microphone permission
+        run: |
+          sed -i 's#<application#<uses-permission android:name="android.permission.RECORD_AUDIO" /><uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" /><application#' android/app/src/main/AndroidManifest.xml
+
+      - name: Install ImageMagick
+        continue-on-error: true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+
+      - name: Make app icon
+        continue-on-error: true
+        run: |
+          if command -v magick >/dev/null 2>&1; then IM="magick"; else IM="convert"; fi
+          R=android/app/src/main/res
+          rm -rf $R/mipmap-anydpi-v26
+          for s in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+            d=${s%%:*}; p=${s##*:}
+            $IM -size 192x192 xc:'#00897b' -fill white -draw "roundrectangle 28,44 164,148 10,10" -stroke '#e53935' -strokewidth 8 -draw "line 48,110 90,76" -draw "line 90,76 120,110" -draw "line 120,110 148,70" -resize ${p}x${p} $R/mipmap-$d/ic_launcher.png
+            cp $R/mipmap-$d/ic_launcher.png $R/mipmap-$d/ic_launcher_round.png
+          done
+
+      - name: Sync web files
+        run: npx cap sync android
+
+      - name: Build debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Whiteboard build ${{ github.run_number }}
+          files: android/app/build/outputs/apk/debug/app-debug.apk
